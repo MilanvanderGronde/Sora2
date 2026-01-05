@@ -146,141 +146,139 @@ def main():
         st.subheader("🚀 Batch Mode")
         batch_size = st.slider("Number of Videos", 1, 5, 1)
 
-    # --- Main UI ---
-    col1, col2 = st.columns([1.5, 1])
+    # --- Main Input Area (Full Width) ---
+    
+    # 1. Draft Section
+    st.subheader("1️⃣ Concept (Draft)")
+    raw_concept = st.text_area(
+        "Draft your idea here...", 
+        height=100, 
+        placeholder="A cat eating pizza on the moon",
+        key="raw_input" 
+    )
 
-    with col1:
-        st.subheader("1️⃣ Concept (Draft)")
-        
-        raw_concept = st.text_area(
-            "Draft your idea here...", 
-            height=100, 
-            placeholder="A cat eating pizza on the moon",
-            key="raw_input" 
-        )
-
-        # Refine Button Action
-        if st.button("✨ AI Refine Prompt"):
-            if not api_key:
-                st.error("Please enter an API Key first.")
-            elif not raw_concept:
-                st.warning("Please type a concept above first.")
-            else:
-                with st.spinner("Refining your idea..."):
-                    client = SoraClient(api_key)
-                    refined = client.refine_prompt_text(raw_concept)
-                    
-                    # --- FIXED: Update BOTH storage and the widget key ---
-                    st.session_state.refined_prompt_text = refined
-                    st.session_state.final_prompt_widget = refined 
-                    
-                    st.rerun()
-
-        st.subheader("2️⃣ Final Prompt (Ready to Generate)")
-        
-        final_prompt = st.text_area(
-            "Review and edit before generating:",
-            value=st.session_state.refined_prompt_text,
-            height=200,
-            key="final_prompt_widget"
-        )
-        
-        # If the box is empty, fallback to raw concept for cost logic/safety
-        active_prompt = final_prompt if final_prompt else raw_concept
-
-        # Cost Logic
-        single_cost = calculate_cost(model, seconds, size)
-        total_batch_cost = single_cost * batch_size
-        
-        st.markdown(f"""
-        <div class="cost-box">
-            <b>💰 Estimated Cost:</b> ${total_batch_cost:.2f} <br>
-            <small>(${single_cost:.2f} per video x {batch_size} copies)</small>
-        </div>
-        """, unsafe_allow_html=True)
-
-        generate_btn = st.button(f"🚀 Generate {batch_size} Video{'s' if batch_size > 1 else ''}", type="primary")
-
-    with col2:
-        st.subheader("📺 Output Queue")
-        output_container = st.container()
-
-        if generate_btn:
-            if not api_key:
-                st.error("Missing API Key")
-                return
-            if not active_prompt:
-                st.error("Please enter a prompt (or refine your draft).")
-                return
-
-            client = SoraClient(api_key)
-            jobs = []
-
-            # 1. Start Jobs
-            with st.status(f"🚀 Starting {batch_size} job(s)...", expanded=True) as status:
-                for i in range(batch_size):
-                    status.write(f"Submitting job {i+1}/{batch_size}...")
-                    job_data = client.create_job(active_prompt, model, seconds, size)
-                    
-                    if job_data.get("error"):
-                        st.error(f"Failed to start job {i+1}: {job_data['error']}")
-                        continue
-                        
-                    jobs.append({
-                        "id": job_data["id"], 
-                        "ui_placeholder": output_container.empty(),
-                        "progress_bar": None
-                    })
+    if st.button("✨ AI Refine Prompt"):
+        if not api_key:
+            st.error("Please enter an API Key first.")
+        elif not raw_concept:
+            st.warning("Please type a concept above first.")
+        else:
+            with st.spinner("Refining your idea..."):
+                client = SoraClient(api_key)
+                refined = client.refine_prompt_text(raw_concept)
                 
-                if not jobs:
-                    st.error("No jobs started.")
-                    return
-                
-                status.update(label="⚡ Processing Batch...", state="running")
+                # Update both storage and widget key
+                st.session_state.refined_prompt_text = refined
+                st.session_state.final_prompt_widget = refined 
+                st.rerun()
 
-            # 2. Poll Jobs
-            active_jobs = jobs[:]
+    # 2. Final Prompt Section
+    st.subheader("2️⃣ Final Prompt (Ready to Generate)")
+    final_prompt = st.text_area(
+        "Review and edit before generating:",
+        value=st.session_state.refined_prompt_text,
+        height=150,
+        key="final_prompt_widget"
+    )
+    
+    active_prompt = final_prompt if final_prompt else raw_concept
+
+    # 3. Cost & Generate
+    st.write("") # Spacer
+    single_cost = calculate_cost(model, seconds, size)
+    total_batch_cost = single_cost * batch_size
+    
+    st.markdown(f"""
+    <div class="cost-box">
+        <b>💰 Estimated Cost:</b> ${total_batch_cost:.2f} <br>
+        <small>(${single_cost:.2f} per video x {batch_size} copies)</small>
+    </div>
+    """, unsafe_allow_html=True)
+
+    generate_btn = st.button(f"🚀 Generate {batch_size} Video{'s' if batch_size > 1 else ''}", type="primary", use_container_width=True)
+
+    # --- Output Queue Section (Bottom) ---
+    st.divider()
+    st.subheader("📺 Output Queue")
+    
+    output_container = st.container()
+
+    if generate_btn:
+        if not api_key:
+            st.error("Missing API Key")
+            return
+        if not active_prompt:
+            st.error("Please enter a prompt (or refine your draft).")
+            return
+
+        client = SoraClient(api_key)
+        jobs = []
+
+        # 1. Start Jobs
+        with st.status(f"🚀 Starting {batch_size} job(s)...", expanded=True) as status:
+            for i in range(batch_size):
+                status.write(f"Submitting job {i+1}/{batch_size}...")
+                job_data = client.create_job(active_prompt, model, seconds, size)
+                
+                if job_data.get("error"):
+                    st.error(f"Failed to start job {i+1}: {job_data['error']}")
+                    continue
+                    
+                jobs.append({
+                    "id": job_data["id"], 
+                    "ui_placeholder": output_container.empty(),
+                    "progress_bar": None
+                })
             
-            while active_jobs:
-                time.sleep(4)
+            if not jobs:
+                st.error("No jobs started.")
+                return
+            
+            status.update(label="⚡ Processing Batch...", state="running")
+
+        # 2. Poll Jobs
+        active_jobs = jobs[:]
+        
+        while active_jobs:
+            time.sleep(4)
+            
+            for job in reversed(active_jobs):
+                data = client.get_status(job["id"])
+                new_status = data.get("status", "unknown")
+                progress = data.get("progress", 0)
                 
-                for job in reversed(active_jobs):
-                    data = client.get_status(job["id"])
-                    new_status = data.get("status", "unknown")
-                    progress = data.get("progress", 0)
+                with job["ui_placeholder"].container():
+                    st.write(f"**Job {job['id'][-6:]}**: `{new_status}`")
+                    if not job["progress_bar"]:
+                        job["progress_bar"] = st.progress(0)
                     
+                    current_prog = int(progress) if progress else 0
+                    if new_status == "queued":
+                        job["progress_bar"].progress(5)
+                    elif new_status in ["processing", "in_progress"]:
+                        job["progress_bar"].progress(max(current_prog, 10))
+                
+                if new_status in ["succeeded", "completed"]:
+                    active_jobs.remove(job)
                     with job["ui_placeholder"].container():
-                        st.write(f"**Job {job['id'][-6:]}**: `{new_status}`")
-                        if not job["progress_bar"]:
-                            job["progress_bar"] = st.progress(0)
-                        
-                        current_prog = int(progress) if progress else 0
-                        if new_status == "queued":
-                            job["progress_bar"].progress(5)
-                        elif new_status in ["processing", "in_progress"]:
-                            job["progress_bar"].progress(max(current_prog, 10))
-                    
-                    if new_status in ["succeeded", "completed"]:
-                        active_jobs.remove(job)
-                        with job["ui_placeholder"].container():
-                            st.success(f"✅ Video {job['id'][-6:]} Ready!")
-                            job["progress_bar"].progress(100)
-                            try:
-                                vid_bytes = client.download_video(job["id"])
-                                st.video(vid_bytes)
-                                st.download_button(
-                                    f"💾 Download {job['id'][-6:]}.mp4", 
-                                    vid_bytes, 
-                                    file_name=f"{job['id']}.mp4",
-                                    mime="video/mp4"
-                                )
-                            except Exception as e:
-                                st.error(f"Download failed: {e}")
-                                
-                    elif new_status in ["failed", "rejected", "error"]:
-                        active_jobs.remove(job)
-                        with job["ui_placeholder"].container():
-                            st.error(f"❌ Job {job['id'][-6:]} Failed")
+                        st.success(f"✅ Video {job['id'][-6:]} Ready!")
+                        job["progress_bar"].progress(100)
+                        try:
+                            vid_bytes = client.download_video(job["id"])
+                            st.video(vid_bytes)
+                            st.download_button(
+                                f"💾 Download {job['id'][-6:]}.mp4", 
+                                vid_bytes, 
+                                file_name=f"{job['id']}.mp4",
+                                mime="video/mp4"
+                            )
+                        except Exception as e:
+                            st.error(f"Download failed: {e}")
+                            
+                elif new_status in ["failed", "rejected", "error"]:
+                    active_jobs.remove(job)
+                    with job["ui_placeholder"].container():
+                        st.error(f"❌ Job {job['id'][-6:]} Failed")
 
 if __name__ == "__main__":
     main()
