@@ -56,11 +56,20 @@ class SoraClient:
 
     def refine_prompt_text(self, text):
         """
-        Uses a cheap model (gpt-4o-mini) to improve the prompt.
+        Attempts to use chatgpt-5-nano. Falls back to gpt-4o-mini if unavailable.
         """
         url = f"{self.API_BASE}/chat/completions"
+        try:
+            return self._call_chat_api(url, "chatgpt-5-nano", text)
+        except Exception:
+            try:
+                return self._call_chat_api(url, "gpt-4o-mini", text)
+            except Exception as e2:
+                return f"Error refining prompt: {e2}"
+
+    def _call_chat_api(self, url, model_name, text):
         payload = {
-            "model": "gpt-4o-mini", 
+            "model": model_name, 
             "messages": [
                 {
                     "role": "system", 
@@ -72,12 +81,9 @@ class SoraClient:
             ],
             "temperature": 0.7
         }
-        try:
-            response = requests.post(url, json=payload, headers=self.headers)
-            response.raise_for_status()
-            return response.json()['choices'][0]['message']['content']
-        except Exception as e:
-            return f"Error refining prompt: {e}"
+        response = requests.post(url, json=payload, headers=self.headers)
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content']
 
 # --------------------------
 # Helper: Cost Calculator
@@ -101,11 +107,9 @@ def calculate_cost(model, seconds, size):
 def main():
     st.set_page_config(page_title="Sora 2 Studio", page_icon="🎥", layout="wide")
 
-    # --- SESSION STATE INITIALIZATION ---
     if "refined_prompt_text" not in st.session_state:
         st.session_state.refined_prompt_text = ""
 
-    # Custom CSS
     st.markdown("""
         <style>
         .stButton button { border-radius: 8px; font-weight: bold; }
@@ -137,18 +141,29 @@ def main():
         """, unsafe_allow_html=True)
         
         st.divider()
+        
+        # --- DYNAMIC CONFIGURATION LOGIC ---
         model = st.selectbox("Model", ["sora-2", "sora-2-pro"], index=0)
-        sizes = ["1920x1080", "1080x1920", "1280x720", "720x1280", "480x854", "854x480"]
-        size = st.selectbox("Resolution", sizes, index=3)
-        seconds = st.select_slider("Duration (s)", options=["4", "8", "12"], value="8")
+        
+        if model == "sora-2":
+            # Standard model limits
+            valid_sizes = ["1280x720", "720x1280", "480x854", "854x480"]
+            valid_seconds = ["4", "8", "12"]
+            default_size_idx = 0 # 1280x720
+        else:
+            # Pro model limits (unlocks 1080p and 20s)
+            valid_sizes = ["1920x1080", "1080x1920", "1280x720", "720x1280", "480x854", "854x480"]
+            valid_seconds = ["4", "8", "12", "16", "20"]
+            default_size_idx = 2 # 1280x720
+            
+        size = st.selectbox("Resolution", valid_sizes, index=default_size_idx)
+        seconds = st.select_slider("Duration (s)", options=valid_seconds, value="8")
         
         st.divider()
         st.subheader("🚀 Batch Mode")
         batch_size = st.slider("Number of Videos", 1, 5, 1)
 
-    # --- Main Input Area (Full Width) ---
-    
-    # 1. Draft Section
+    # --- Main Input Area ---
     st.subheader("1️⃣ Concept (Draft)")
     raw_concept = st.text_area(
         "Draft your idea here...", 
@@ -157,7 +172,7 @@ def main():
         key="raw_input" 
     )
 
-    if st.button("✨ AI Refine Prompt"):
+    if st.button("✨ AI Refine Prompt (via ChatGPT-5-Nano)"):
         if not api_key:
             st.error("Please enter an API Key first.")
         elif not raw_concept:
@@ -166,13 +181,10 @@ def main():
             with st.spinner("Refining your idea..."):
                 client = SoraClient(api_key)
                 refined = client.refine_prompt_text(raw_concept)
-                
-                # Update both storage and widget key to force UI update
                 st.session_state.refined_prompt_text = refined
                 st.session_state.final_prompt_widget = refined 
                 st.rerun()
 
-    # 2. Final Prompt Section
     st.subheader("2️⃣ Final Prompt (Ready to Generate)")
     final_prompt = st.text_area(
         "Review and edit before generating:",
@@ -181,15 +193,12 @@ def main():
         key="final_prompt_widget"
     )
     
-    # Fallback Logic: Use Final Prompt if available, otherwise use Draft
     active_prompt = final_prompt if final_prompt else raw_concept
 
-    # 3. Cost & Generate
-    st.write("") # Spacer
+    st.write("") 
     single_cost = calculate_cost(model, seconds, size)
     total_batch_cost = single_cost * batch_size
     
-    # Show user which prompt is being used
     if final_prompt:
         st.info("✅ **Ready:** Using **Refined Prompt** (Box 2)")
     elif raw_concept:
@@ -204,10 +213,9 @@ def main():
 
     generate_btn = st.button(f"🚀 Generate {batch_size} Video{'s' if batch_size > 1 else ''}", type="primary", use_container_width=True)
 
-    # --- Output Queue Section (Bottom) ---
+    # --- Output Queue ---
     st.divider()
     st.subheader("📺 Output Queue")
-    
     output_container = st.container()
 
     if generate_btn:
@@ -215,13 +223,12 @@ def main():
             st.error("Missing API Key")
             return
         if not active_prompt:
-            st.error("Please enter a prompt (or refine your draft).")
+            st.error("Please enter a prompt.")
             return
 
         client = SoraClient(api_key)
         jobs = []
 
-        # 1. Start Jobs
         with st.status(f"🚀 Starting {batch_size} job(s)...", expanded=True) as status:
             for i in range(batch_size):
                 status.write(f"Submitting job {i+1}/{batch_size}...")
@@ -243,12 +250,10 @@ def main():
             
             status.update(label="⚡ Processing Batch...", state="running")
 
-        # 2. Poll Jobs
         active_jobs = jobs[:]
         
         while active_jobs:
             time.sleep(4)
-            
             for job in reversed(active_jobs):
                 data = client.get_status(job["id"])
                 new_status = data.get("status", "unknown")
@@ -274,7 +279,7 @@ def main():
                             vid_bytes = client.download_video(job["id"])
                             st.video(vid_bytes)
                             st.download_button(
-                                f"💾 Download {job['id'][-6:]}.mp4", 
+                                f"💾 Download.mp4", 
                                 vid_bytes, 
                                 file_name=f"{job['id']}.mp4",
                                 mime="video/mp4"
