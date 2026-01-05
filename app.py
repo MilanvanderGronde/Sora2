@@ -167,7 +167,7 @@ def main():
                 client = SoraClient(api_key)
                 refined = client.refine_prompt_text(raw_concept)
                 
-                # Update both storage and widget key
+                # Update both storage and widget key to force UI update
                 st.session_state.refined_prompt_text = refined
                 st.session_state.final_prompt_widget = refined 
                 st.rerun()
@@ -181,12 +181,19 @@ def main():
         key="final_prompt_widget"
     )
     
+    # Fallback Logic: Use Final Prompt if available, otherwise use Draft
     active_prompt = final_prompt if final_prompt else raw_concept
 
     # 3. Cost & Generate
     st.write("") # Spacer
     single_cost = calculate_cost(model, seconds, size)
     total_batch_cost = single_cost * batch_size
+    
+    # Show user which prompt is being used
+    if final_prompt:
+        st.info("✅ **Ready:** Using **Refined Prompt** (Box 2)")
+    elif raw_concept:
+        st.info("ℹ️ **Ready:** Using **Draft Concept** (Box 1)")
     
     st.markdown(f"""
     <div class="cost-box">
